@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.media.audiofx.AcousticEchoCanceler
 import android.os.SystemClock
 import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
@@ -36,7 +37,10 @@ import kotlin.math.sqrt
 /**
  * 一条麦克风流驱动的状态机：
  *
- *   IDLE ──KWS 命中──▶ LISTENING ──端点/VAD 断句──▶ RECOGNIZING ──▶ onCommand ──▶ IDLE
+ *   IDLE ──KWS 命中──▶ LISTENING ──端点/VAD 断句──▶ onCommand ──▶ WAITING
+ *                         ▲                                           │
+ *                         └────────── listenAgain()（连续对话）────────┤
+ *   IDLE ◀──────────── endSession() / 聆听超时 ◀────────────────────────┘
  *
  * 普通话模式：流式 zipformer + modified_beam_search，热词实时生效，边说边出字。
  * 方言/SenseVoice 模式：silero VAD 切出一句话，再交给离线模型整句识别。
@@ -44,8 +48,33 @@ import kotlin.math.sqrt
 class AssistantEngine(
     private val ctx: Context,
     private val settings: AppSettings,
-    private val onCommand: (String) -> Unit,
+    private val callbacks: Callbacks,
 ) {
+    interface Callbacks {
+        /** 唤醒词命中，引擎已进入聆听。在引擎线程调用，可以直接在这里开始播报「我在」。 */
+        fun onWake(keyword: String)
+        /** 识别出一句话。引擎随即进入 WAITING，直到 [listenAgain] 或 [endSession]。 */
+        fun onCommand(text: String)
+        /** 聆听超时没听到话（或识别为空），已回到待唤醒。 */
+        fun onSessionEnd()
+        /**
+         * 播报回复或等大模型时又听到了唤醒词（打断）。在引擎线程调用，必须在这里同步停掉 TTS；
+         * 返回后引擎直接进入聆听，不再播「我在」。
+         */
+        fun onBargeIn(keyword: String)
+    }
+
+    private sealed interface Request
+    private data class Listen(val timeoutSec: Float) : Request
+    private object End : Request
+    @Volatile private var request: Request? = null
+
+    /** 回复播完后继续听下一句，不用再喊唤醒词。任意线程可调用。 */
+    fun listenAgain(timeoutSec: Float) { request = Listen(timeoutSec) }
+
+    /** 结束本次会话，回到待唤醒。任意线程可调用。 */
+    fun endSession() { request = End }
+
     private val paths = ModelPaths(ctx)
     @Volatile private var running = false
     private var thread: Thread? = null
@@ -160,8 +189,8 @@ class AssistantEngine(
                                 modelingUnit = "cjkchar",
                             ),
                             endpointConfig = EndpointConfig(
-                                // 唤醒后一直不说话
-                                rule1 = EndpointRule(false, settings.listenTimeoutSec, 0f),
+                                // 「一直不说话」的超时由主循环自己计时（播报期间不算），这里设成很长
+                                rule1 = EndpointRule(false, MAX_UTTERANCE_SEC * 2, 0f),
                                 // 说完一句后的静音
                                 rule2 = EndpointRule(true, settings.endSilenceSec, 0f),
                                 rule3 = EndpointRule(false, 0f, MAX_UTTERANCE_SEC),
@@ -240,15 +269,16 @@ class AssistantEngine(
 
     // ---------------------------------------------------------------- 主循环
 
-    private enum class Phase { IDLE, LISTENING }
+    private enum class Phase { IDLE, LISTENING, WAITING }
 
     @SuppressLint("MissingPermission")
     private fun loop() {
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
         )
+        // VOICE_COMMUNICATION 会走平台的回声消除通路，播报时说唤醒词更容易被听到
         val record = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            if (settings.echoCancel) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.VOICE_RECOGNITION,
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
             max(minBuf, SAMPLE_RATE * 2),
         )
@@ -258,12 +288,20 @@ class AssistantEngine(
             return
         }
         val tone = runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 80) }.getOrNull()
+        val aec = if (settings.echoCancel && AcousticEchoCanceler.isAvailable()) {
+            AcousticEchoCanceler.create(record.audioSessionId)?.apply { enabled = true }
+        } else null
+        AssistantBus.log("录音源 ${if (settings.echoCancel) "VOICE_COMMUNICATION" else "VOICE_RECOGNITION"}，" +
+            "回声消除 ${if (aec?.enabled == true) "已开启" else if (AcousticEchoCanceler.isAvailable()) "未开启" else "设备不支持"}")
 
         val pcm = ShortArray(VAD_WINDOW)
         val samples = FloatArray(VAD_WINDOW)
         var phase = Phase.IDLE
         var asrStream: OnlineStream? = null
         var listenStart = 0L
+        var listenTimeoutMs = 0L
+        // 诊断：播报回复期间麦克风的峰值，用来判断打断时唤醒词是不是被回声盖住了
+        var echoPeakDb = -100f
         var speechSeen = false
         var speechStart = 0
         var lastPartial = ""
@@ -287,12 +325,33 @@ class AssistantEngine(
             AssistantBus.state(EngineState.IDLE)
         }
 
+        fun startListening(timeoutSec: Float) {
+            if (echoPeakDb > -100f) {
+                AssistantBus.log("上一段播报期间麦克风峰值 %.0f dB".format(echoPeakDb))
+                echoPeakDb = -100f
+            }
+            phase = Phase.LISTENING
+            listenStart = SystemClock.elapsedRealtime()
+            listenTimeoutMs = (timeoutSec * 1000).toLong()
+            speechSeen = false
+            listenPeakDb = -100f
+            listenMuted = 0
+            lastPartial = ""
+            utterance.clear()
+            asrStream?.release()
+            asrStream = online?.createStream()
+            vad?.reset()
+            AssistantBus.state(EngineState.LISTENING)
+            AssistantBus.partial("")
+        }
+
         fun noCommand() {
-            AssistantBus.log("唤醒后没有听到指令，回到待唤醒（峰值 %.0f dB，静音丢弃 %d 帧）".format(listenPeakDb, listenMuted))
+            AssistantBus.log("没有听到指令，回到待唤醒（峰值 %.0f dB，静音丢弃 %d 帧）".format(listenPeakDb, listenMuted))
             // 超时的录音也留着，方便排查“明明说了却没听到”
             if (settings.saveAudio) saveWav(utterance.toArray(), "timeout")
             AssistantBus.final("")
             backToIdle()
+            callbacks.onSessionEnd()
         }
 
         fun finish(rawText: String, extra: String = "") {
@@ -304,8 +363,18 @@ class AssistantEngine(
             )
             if (settings.saveAudio) saveWav(utterance.toArray(), text)
             AssistantBus.final(text)
-            if (text.isNotEmpty()) onCommand(text)
-            backToIdle()
+            if (text.isEmpty()) {
+                backToIdle()
+                callbacks.onSessionEnd()
+                return
+            }
+            asrStream?.release(); asrStream = null
+            vad?.reset()
+            utterance.clear()
+            kws!!.reset(kwsStream!!) // WAITING 期间要靠它听打断
+            phase = Phase.WAITING
+            AssistantBus.state(EngineState.WAITING)
+            callbacks.onCommand(text)
         }
 
         try {
@@ -315,9 +384,35 @@ class AssistantEngine(
                 for (i in 0 until n) samples[i] = pcm[i] / 32768f
                 val chunk = if (n == samples.size) samples else samples.copyOf(n)
 
+                // 会话控制（来自 VoiceSession，在引擎线程里统一生效）
+                request?.let { req ->
+                    request = null
+                    when (req) {
+                        is Listen -> if (phase == Phase.WAITING) startListening(req.timeoutSec)
+                        End -> if (phase != Phase.IDLE) backToIdle()
+                    }
+                }
+
                 val db = rmsDb(chunk)
-                if (++levelTick % 4 == 0) AssistantBus.level(db)
+                // 浮窗波浪靠它驱动，64ms 一次
+                if (++levelTick % 2 == 0) AssistantBus.level(db)
                 if (phase == Phase.LISTENING) listenPeakDb = max(listenPeakDb, db)
+
+                // 打断：播报回复 / 等大模型的时候只跑唤醒模型，听到唤醒词就停掉播报重新聆听。
+                // 识别模型在播报时不开：没有回声消除，会把自己的声音识别成指令；唤醒词则很难被回复内容误触发。
+                if (phase == Phase.WAITING && settings.bargeIn) {
+                    if (AssistantBus.speaking) echoPeakDb = max(echoPeakDb, db)
+                    val kw = spot(chunk)
+                    if (kw != null) {
+                        AssistantBus.log("★ 打断：$kw（播报中=${AssistantBus.speaking}）")
+                        callbacks.onBargeIn(kw)
+                        AssistantBus.speaking = false
+                        wasSpeaking = false
+                        startListening(settings.listenTimeoutSec)
+                    }
+                    wasSpeaking = AssistantBus.speaking
+                    continue
+                }
 
                 // 自己播报时不听，播完重置唤醒流，避免把 TTS 的尾音当作唤醒词
                 if (AssistantBus.speaking) {
@@ -328,34 +423,24 @@ class AssistantEngine(
                 if (wasSpeaking) {
                     wasSpeaking = false
                     kws!!.reset(kwsStream!!)
+                    // 「我在」播完才开始算聆听超时
+                    if (phase == Phase.LISTENING) listenStart = SystemClock.elapsedRealtime()
                 }
 
                 when (phase) {
                     Phase.IDLE -> {
-                        val s = kwsStream!!
-                        s.acceptWaveform(chunk, SAMPLE_RATE)
-                        while (kws!!.isReady(s)) kws!!.decode(s)
-                        val r = kws!!.getResult(s)
-                        if (r.keyword.isEmpty()) continue
-
-                        kws!!.reset(s)
+                        val kw = spot(chunk) ?: continue
                         AssistantBus.wake()
-                        AssistantBus.log("★ 唤醒：${r.keyword}  tokens=[${r.tokens.joinToString(" ")}]  第 ${AssistantBus.wakeCount} 次")
+                        AssistantBus.log("★ 唤醒：$kw  第 ${AssistantBus.wakeCount} 次")
                         if (settings.beepOnWake) tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
                         if (settings.kwsTestMode) continue
 
-                        phase = Phase.LISTENING
-                        listenStart = SystemClock.elapsedRealtime()
-                        speechSeen = false
-                        listenPeakDb = -100f
-                        listenMuted = 0
-                        lastPartial = ""
-                        utterance.clear()
-                        online?.let { asrStream = it.createStream() }
-                        vad?.reset()
-                        AssistantBus.state(EngineState.LISTENING)
-                        AssistantBus.partial("")
+                        startListening(settings.listenTimeoutSec)
+                        callbacks.onWake(kw)
                     }
+
+                    // 等回复播完；这段时间的音频不用
+                    Phase.WAITING -> {}
 
                     Phase.LISTENING -> {
                         utterance.add(chunk)
@@ -369,12 +454,12 @@ class AssistantEngine(
                                 lastPartial = text
                                 AssistantBus.partial(text)
                             }
-                            if (rec.isEndpoint(s)) {
-                                if (text.isBlank()) {
-                                    noCommand()
-                                } else {
-                                    finish(text)
-                                }
+                            if (rec.isEndpoint(s) && text.isNotBlank()) {
+                                finish(text)
+                            } else if (text.isBlank() &&
+                                SystemClock.elapsedRealtime() - listenStart > listenTimeoutMs
+                            ) {
+                                noCommand()
                             }
                         } else {
                             val v = vad!!
@@ -402,7 +487,7 @@ class AssistantEngine(
                                 }
                                 finish(r.text, extra)
                             } else if (!speechSeen &&
-                                SystemClock.elapsedRealtime() - listenStart > settings.listenTimeoutSec * 1000
+                                SystemClock.elapsedRealtime() - listenStart > listenTimeoutMs
                             ) {
                                 noCommand()
                             }
@@ -412,10 +497,22 @@ class AssistantEngine(
             }
         } finally {
             asrStream?.release()
+            aec?.release()
             record.stop()
             record.release()
             tone?.release()
         }
+    }
+
+    /** 喂一帧给唤醒模型，命中返回唤醒词并重置流。 */
+    private fun spot(chunk: FloatArray): String? {
+        val s = kwsStream!!
+        s.acceptWaveform(chunk, SAMPLE_RATE)
+        while (kws!!.isReady(s)) kws!!.decode(s)
+        val r = kws!!.getResult(s)
+        if (r.keyword.isEmpty()) return null
+        kws!!.reset(s)
+        return r.keyword
     }
 
     // ---------------------------------------------------------------- 调试辅助

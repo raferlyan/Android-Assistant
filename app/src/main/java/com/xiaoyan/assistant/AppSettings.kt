@@ -9,6 +9,12 @@ enum class AsrMode(val label: String) {
     SENSEVOICE("粤语/多语种·SenseVoice"),
 }
 
+/** 设备形态：决定回复话术和浮窗位置。 */
+enum class DeviceMode(val label: String) {
+    CAR("车机（平板车机）"),
+    PHONE("手机"),
+}
+
 /**
  * 所有可调参数。保存在 SharedPreferences，修改后由 Service 重新加载引擎。
  */
@@ -40,10 +46,32 @@ data class AppSettings(
     /** 说完后静音多久判定一句话结束（秒）。 */
     val endSilenceSec: Float = 0.8f,
     val numThreads: Int = 2,
-    val beepOnWake: Boolean = true,
+    val beepOnWake: Boolean = false,
     val speakReply: Boolean = true,
     val saveAudio: Boolean = true,
+
+    val deviceMode: DeviceMode = DeviceMode.PHONE,
+    /** 唤醒后显示胶囊浮窗（需要悬浮窗权限）。 */
+    val showOverlay: Boolean = true,
+    /** 回复播完后继续聆听多久（秒），期间不用再喊唤醒词；0 表示每次都要唤醒。 */
+    val followUpSec: Float = 6f,
+    /** 播报回复或等待大模型时，说唤醒词可以打断并直接下达新指令。 */
+    val bargeIn: Boolean = true,
+    /**
+     * 录音走 VOICE_COMMUNICATION + 平台回声消除。不开的话，播报时手机自己的声音会盖住唤醒词，打断基本听不到；
+     * 代价是系统会额外做降噪/增益，远场唤醒率可能有变化，需要按设备实测。
+     */
+    val echoCancel: Boolean = true,
+
+    /** 本地规则匹配不上时调用在线大模型。 */
+    val llmEnabled: Boolean = true,
+    val llmBaseUrl: String = LlmPreset.DEEPSEEK.baseUrl,
+    val llmModel: String = LlmPreset.DEEPSEEK.model,
+    /** 留空时使用 local.properties 里的 llm.apiKey（只用于调试，不入库）。 */
+    val llmApiKey: String = "",
 ) {
+    val effectiveLlmKey get() = llmApiKey.trim().ifEmpty { BuildConfig.LLM_DEBUG_KEY }
+
     fun save(ctx: Context) {
         prefs(ctx).edit()
             .putString("keywords", keywords)
@@ -63,6 +91,15 @@ data class AppSettings(
             .putBoolean("beepOnWake", beepOnWake)
             .putBoolean("speakReply", speakReply)
             .putBoolean("saveAudio", saveAudio)
+            .putString("deviceMode", deviceMode.name)
+            .putBoolean("showOverlay", showOverlay)
+            .putFloat("followUpSec", followUpSec)
+            .putBoolean("bargeIn", bargeIn)
+            .putBoolean("echoCancel", echoCancel)
+            .putBoolean("llmEnabled", llmEnabled)
+            .putString("llmBaseUrl", llmBaseUrl)
+            .putString("llmModel", llmModel)
+            .putString("llmApiKey", llmApiKey)
             .apply()
     }
 
@@ -95,6 +132,16 @@ data class AppSettings(
                 beepOnWake = p.getBoolean("beepOnWake", d.beepOnWake),
                 speakReply = p.getBoolean("speakReply", d.speakReply),
                 saveAudio = p.getBoolean("saveAudio", d.saveAudio),
+                deviceMode = runCatching { DeviceMode.valueOf(p.getString("deviceMode", d.deviceMode.name)!!) }
+                    .getOrDefault(d.deviceMode),
+                showOverlay = p.getBoolean("showOverlay", d.showOverlay),
+                followUpSec = p.getFloat("followUpSec", d.followUpSec),
+                bargeIn = p.getBoolean("bargeIn", d.bargeIn),
+                echoCancel = p.getBoolean("echoCancel", d.echoCancel),
+                llmEnabled = p.getBoolean("llmEnabled", d.llmEnabled),
+                llmBaseUrl = p.getString("llmBaseUrl", d.llmBaseUrl)!!,
+                llmModel = p.getString("llmModel", d.llmModel)!!,
+                llmApiKey = p.getString("llmApiKey", d.llmApiKey)!!,
             )
         }
     }

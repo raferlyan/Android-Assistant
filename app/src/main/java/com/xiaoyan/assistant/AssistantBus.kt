@@ -14,6 +14,7 @@ enum class EngineState(val label: String) {
     IDLE("等待唤醒：说唤醒词，如「小晏小晏」"),
     LISTENING("正在聆听…"),
     RECOGNIZING("识别中…"),
+    WAITING("处理/播报回复中…"),
     ERROR("出错"),
 }
 
@@ -25,6 +26,7 @@ object AssistantBus {
         fun onState(state: EngineState) {}
         fun onPartial(text: String) {}
         fun onFinal(text: String) {}
+        fun onReply(text: String) {}
         fun onLevel(db: Float) {}
         fun onLog(line: String) {}
         fun onStats(wakeCount: Int) {}
@@ -52,6 +54,7 @@ object AssistantBus {
     fun partial(t: String) = main.post { listeners.forEach { it.onPartial(t) } }
     fun final(t: String) = main.post { listeners.forEach { it.onFinal(t) } }
     fun level(db: Float) = main.post { listeners.forEach { it.onLevel(db) } }
+    fun reply(t: String) = main.post { listeners.forEach { it.onReply(t) } }
 
     fun wake() {
         wakeCount++

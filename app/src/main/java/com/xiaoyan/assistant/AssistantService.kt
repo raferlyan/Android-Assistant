@@ -16,7 +16,7 @@ import android.os.PowerManager
 class AssistantService : Service() {
 
     private var engine: AssistantEngine? = null
-    private var commands: CommandHandler? = null
+    private var session: VoiceSession? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -28,6 +28,20 @@ class AssistantService : Service() {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
+            }
+            ACTION_TEXT -> {
+                val text = intent.getStringExtra(EXTRA_TEXT).orEmpty()
+                val s = session
+                if (s == null) {
+                    AssistantBus.log("引擎没在运行，先点「保存并(重)启动」")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (text.isNotBlank()) {
+                    AssistantBus.log("文字指令：$text")
+                    s.simulate(text)
+                }
+                return START_STICKY
             }
             else -> { // START / RELOAD
                 goForeground()
@@ -41,8 +55,11 @@ class AssistantService : Service() {
     private fun startEngine() {
         val s = AppSettings.load(this)
         AssistantBus.log("启动引擎：${s.asrMode.label}，阈值=${s.kwsThreshold}，增强=${s.kwsScore}")
-        val c = CommandHandler(this, s.speakReply).also { commands = it }
-        engine = AssistantEngine(this, s) { text -> c.handle(text) }.also { it.start() }
+        val vs = VoiceSession(this, s).also { session = it }
+        engine = AssistantEngine(this, s, vs).also {
+            vs.engine = it
+            it.start()
+        }
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "XiaoYan::engine")
             .apply { acquire() }
@@ -50,7 +67,7 @@ class AssistantService : Service() {
 
     private fun stopEngine() {
         engine?.stop(); engine = null
-        commands?.release(); commands = null
+        session?.release(); session = null
         wakeLock?.takeIf { it.isHeld }?.release(); wakeLock = null
         AssistantBus.state(EngineState.STOPPED)
     }
@@ -86,10 +103,14 @@ class AssistantService : Service() {
         private const val CHANNEL = "assistant"
         const val ACTION_START = "start"
         const val ACTION_STOP = "stop"
+        /** 不经过语音，直接把一句文字交给会话处理（调试意图用）。 */
+        const val ACTION_TEXT = "text"
+        const val EXTRA_TEXT = "text"
 
-        fun send(ctx: Context, action: String) {
+        fun send(ctx: Context, action: String, text: String? = null) {
             val i = Intent(ctx, AssistantService::class.java).setAction(action)
-            if (action == ACTION_STOP) ctx.startService(i) else ctx.startForegroundService(i)
+            text?.let { i.putExtra(EXTRA_TEXT, it) }
+            if (action == ACTION_START) ctx.startForegroundService(i) else ctx.startService(i)
         }
     }
 }
