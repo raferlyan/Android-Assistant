@@ -1,0 +1,31 @@
+# Gradle
+.gradle/
+build/
+**/build/
+.kotlin/
+
+# 本机配置（SDK 路径、签名等）
+local.properties
+*.keystore
+*.jks
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# 模型文件太大，不入库，用 tools/push_models.sh 下载并推送到手机
+models/
+*.onnx
+*.tar.bz2
+
+# 调试时从手机拉下来的录音
+recordings/
+*.wav
+
+# 其他
+*.log
+captures/
+.externalNativeBuild/
+.cxx/

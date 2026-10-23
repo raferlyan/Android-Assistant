@@ -1,0 +1,462 @@
+package com.xiaoyan.assistant
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.media.ToneGenerator
+import android.os.SystemClock
+import com.k2fsa.sherpa.onnx.EndpointConfig
+import com.k2fsa.sherpa.onnx.EndpointRule
+import com.k2fsa.sherpa.onnx.FeatureConfig
+import com.k2fsa.sherpa.onnx.KeywordSpotter
+import com.k2fsa.sherpa.onnx.KeywordSpotterConfig
+import com.k2fsa.sherpa.onnx.OfflineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
+import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
+import com.k2fsa.sherpa.onnx.OnlineModelConfig
+import com.k2fsa.sherpa.onnx.OnlineRecognizer
+import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
+import com.k2fsa.sherpa.onnx.OnlineStream
+import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
+import com.k2fsa.sherpa.onnx.SileroVadModelConfig
+import com.k2fsa.sherpa.onnx.Vad
+import com.k2fsa.sherpa.onnx.VadModelConfig
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.log10
+import kotlin.math.max
+import kotlin.math.sqrt
+
+/**
+ * 一条麦克风流驱动的状态机：
+ *
+ *   IDLE ──KWS 命中──▶ LISTENING ──端点/VAD 断句──▶ RECOGNIZING ──▶ onCommand ──▶ IDLE
+ *
+ * 普通话模式：流式 zipformer + modified_beam_search，热词实时生效，边说边出字。
+ * 方言/SenseVoice 模式：silero VAD 切出一句话，再交给离线模型整句识别。
+ */
+class AssistantEngine(
+    private val ctx: Context,
+    private val settings: AppSettings,
+    private val onCommand: (String) -> Unit,
+) {
+    private val paths = ModelPaths(ctx)
+    @Volatile private var running = false
+    private var thread: Thread? = null
+
+    private var kws: KeywordSpotter? = null
+    private var kwsStream: OnlineStream? = null
+    private var online: OnlineRecognizer? = null
+    private var offline: OfflineRecognizer? = null
+    private var vad: Vad? = null
+    private var corrections: List<Pair<String, String>> = emptyList()
+
+    fun start() {
+        if (running) return
+        running = true
+        thread = Thread(::run, "xiaoyan-engine").apply { start() }
+    }
+
+    fun stop() {
+        running = false
+        thread?.join(3000)
+        thread = null
+    }
+
+    private fun run() {
+        try {
+            AssistantBus.state(EngineState.LOADING)
+            if (!load()) {
+                AssistantBus.state(EngineState.ERROR)
+                return
+            }
+            loop()
+            AssistantBus.state(EngineState.STOPPED)
+        } catch (t: Throwable) {
+            AssistantBus.log("引擎异常：${t.javaClass.simpleName}: ${t.message}")
+            AssistantBus.state(EngineState.ERROR)
+        } finally {
+            release()
+        }
+    }
+
+    // ---------------------------------------------------------------- 模型加载
+
+    private fun load(): Boolean {
+        val missing = paths.missingFor(settings.asrMode)
+        if (missing.isNotEmpty()) {
+            AssistantBus.log("缺少模型文件（请先运行 tools/push_models.sh）：")
+            missing.forEach { AssistantBus.log("  ✗ $it") }
+            return false
+        }
+        val prep = TextPrep(ctx)
+        val feat = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80)
+
+        // 1) 唤醒词
+        val kw = prep.prepareKeywords(settings.keywords, paths.kwsTokens)
+        kw.warnings.forEach { AssistantBus.log("⚠ $it") }
+        if (kw.count == 0) {
+            AssistantBus.log("没有可用的唤醒词")
+            return false
+        }
+        val kwFile = File(ctx.filesDir, "keywords.txt").apply { writeText(kw.content + "\n") }
+        AssistantBus.log("唤醒词：\n${kw.content}")
+        timed("加载唤醒模型") {
+            kws = KeywordSpotter(
+                assetManager = null,
+                config = KeywordSpotterConfig(
+                    featConfig = feat,
+                    modelConfig = OnlineModelConfig(
+                        transducer = OnlineTransducerModelConfig(
+                            encoder = paths.kwsEncoder,
+                            decoder = paths.kwsDecoder,
+                            joiner = paths.kwsJoiner,
+                        ),
+                        tokens = paths.kwsTokens,
+                        modelType = "zipformer2",
+                        numThreads = 1,
+                    ),
+                    keywordsFile = kwFile.absolutePath,
+                    keywordsScore = settings.kwsScore,
+                    keywordsThreshold = settings.kwsThreshold,
+                    numTrailingBlanks = settings.kwsTrailingBlanks,
+                ),
+            )
+            kwsStream = kws!!.createStream()
+        }
+        if (settings.kwsTestMode) {
+            AssistantBus.log("唤醒测试模式：只统计唤醒，不加载识别模型")
+            return true
+        }
+
+        corrections = TextPrep.parseCorrections(settings.corrections)
+
+        // 2) 识别
+        when (settings.asrMode) {
+            AsrMode.MANDARIN_STREAMING -> {
+                val hw = prep.prepareHotwords(settings.hotwords, paths.streamTokens)
+                hw.warnings.forEach { AssistantBus.log("⚠ $it") }
+                val hwFile = File(ctx.filesDir, "hotwords.txt").apply { writeText(hw.content + "\n") }
+                AssistantBus.log("热词 ${hw.count} 个，hotwordsScore=${settings.hotwordsScore}")
+                timed("加载普通话流式模型") {
+                    online = OnlineRecognizer(
+                        assetManager = null,
+                        config = OnlineRecognizerConfig(
+                            featConfig = feat,
+                            modelConfig = OnlineModelConfig(
+                                transducer = OnlineTransducerModelConfig(
+                                    encoder = paths.streamEncoder,
+                                    decoder = paths.streamDecoder,
+                                    joiner = paths.streamJoiner,
+                                ),
+                                tokens = paths.streamTokens,
+                                numThreads = settings.numThreads,
+                                modelingUnit = "cjkchar",
+                            ),
+                            endpointConfig = EndpointConfig(
+                                // 唤醒后一直不说话
+                                rule1 = EndpointRule(false, settings.listenTimeoutSec, 0f),
+                                // 说完一句后的静音
+                                rule2 = EndpointRule(true, settings.endSilenceSec, 0f),
+                                rule3 = EndpointRule(false, 0f, MAX_UTTERANCE_SEC),
+                            ),
+                            enableEndpoint = true,
+                            // 热词只在 modified_beam_search 下生效
+                            decodingMethod = if (hw.count > 0) "modified_beam_search" else "greedy_search",
+                            maxActivePaths = 4,
+                            hotwordsFile = if (hw.count > 0) hwFile.absolutePath else "",
+                            hotwordsScore = settings.hotwordsScore,
+                        ),
+                    )
+                }
+            }
+
+            AsrMode.DIALECT_TELESPEECH, AsrMode.SENSEVOICE -> {
+                val model = if (settings.asrMode == AsrMode.DIALECT_TELESPEECH) {
+                    OfflineModelConfig(
+                        teleSpeech = paths.teleModel,
+                        tokens = paths.teleTokens,
+                        modelType = "telespeech_ctc",
+                        numThreads = settings.numThreads,
+                    )
+                } else {
+                    OfflineModelConfig(
+                        senseVoice = OfflineSenseVoiceModelConfig(
+                            model = paths.svModel,
+                            language = settings.senseVoiceLang.takeIf { it != "auto" } ?: "",
+                            useInverseTextNormalization = true,
+                        ),
+                        tokens = paths.svTokens,
+                        numThreads = settings.numThreads,
+                    )
+                }
+                timed("加载${settings.asrMode.label}") {
+                    offline = OfflineRecognizer(
+                        assetManager = null,
+                        config = OfflineRecognizerConfig(featConfig = feat, modelConfig = model),
+                    )
+                }
+                timed("加载 VAD") {
+                    vad = Vad(
+                        assetManager = null,
+                        config = VadModelConfig(
+                            sileroVadModelConfig = SileroVadModelConfig(
+                                model = paths.vad,
+                                threshold = settings.vadThreshold,
+                                minSilenceDuration = settings.endSilenceSec,
+                                minSpeechDuration = 0.25f,
+                                windowSize = VAD_WINDOW,
+                                maxSpeechDuration = MAX_UTTERANCE_SEC,
+                            ),
+                            sampleRate = SAMPLE_RATE,
+                            numThreads = 1,
+                        ),
+                    )
+                }
+            }
+        }
+        return true
+    }
+
+    private inline fun timed(what: String, block: () -> Unit) {
+        val t0 = SystemClock.elapsedRealtime()
+        block()
+        AssistantBus.log("$what 完成，用时 ${SystemClock.elapsedRealtime() - t0} ms")
+    }
+
+    private fun release() {
+        kwsStream?.release(); kwsStream = null
+        kws?.release(); kws = null
+        online?.release(); online = null
+        offline?.release(); offline = null
+        vad?.release(); vad = null
+    }
+
+    // ---------------------------------------------------------------- 主循环
+
+    private enum class Phase { IDLE, LISTENING }
+
+    @SuppressLint("MissingPermission")
+    private fun loop() {
+        val minBuf = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+        )
+        val record = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+            max(minBuf, SAMPLE_RATE * 2),
+        )
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            AssistantBus.log("AudioRecord 初始化失败（检查录音权限 / 是否被其他应用占用）")
+            AssistantBus.state(EngineState.ERROR)
+            return
+        }
+        val tone = runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 80) }.getOrNull()
+
+        val pcm = ShortArray(VAD_WINDOW)
+        val samples = FloatArray(VAD_WINDOW)
+        var phase = Phase.IDLE
+        var asrStream: OnlineStream? = null
+        var listenStart = 0L
+        var speechSeen = false
+        var speechStart = 0
+        var lastPartial = ""
+        val utterance = FloatBuffer()
+        var levelTick = 0
+        var wasSpeaking = false
+        // 诊断：本次聆听期间的最大电平、因 TTS 播报被丢弃的帧数
+        var listenPeakDb = -100f
+        var listenMuted = 0
+
+        record.startRecording()
+        AssistantBus.state(EngineState.IDLE)
+        AssistantBus.log("开始监听麦克风（${SAMPLE_RATE}Hz）")
+
+        fun backToIdle() {
+            asrStream?.release(); asrStream = null
+            vad?.reset()
+            utterance.clear()
+            kws!!.reset(kwsStream!!)
+            phase = Phase.IDLE
+            AssistantBus.state(EngineState.IDLE)
+        }
+
+        fun noCommand() {
+            AssistantBus.log("唤醒后没有听到指令，回到待唤醒（峰值 %.0f dB，静音丢弃 %d 帧）".format(listenPeakDb, listenMuted))
+            // 超时的录音也留着，方便排查“明明说了却没听到”
+            if (settings.saveAudio) saveWav(utterance.toArray(), "timeout")
+            AssistantBus.final("")
+            backToIdle()
+        }
+
+        fun finish(rawText: String, extra: String = "") {
+            val text = TextPrep.applyCorrections(rawText.trim(), corrections)
+            val cost = SystemClock.elapsedRealtime() - listenStart
+            AssistantBus.log(
+                "识别结果：「$text」" + (if (text != rawText.trim()) "（原始「${rawText.trim()}」）" else "") +
+                    " $extra 唤醒后 ${cost}ms",
+            )
+            if (settings.saveAudio) saveWav(utterance.toArray(), text)
+            AssistantBus.final(text)
+            if (text.isNotEmpty()) onCommand(text)
+            backToIdle()
+        }
+
+        try {
+            while (running) {
+                val n = record.read(pcm, 0, pcm.size)
+                if (n <= 0) continue
+                for (i in 0 until n) samples[i] = pcm[i] / 32768f
+                val chunk = if (n == samples.size) samples else samples.copyOf(n)
+
+                val db = rmsDb(chunk)
+                if (++levelTick % 4 == 0) AssistantBus.level(db)
+                if (phase == Phase.LISTENING) listenPeakDb = max(listenPeakDb, db)
+
+                // 自己播报时不听，播完重置唤醒流，避免把 TTS 的尾音当作唤醒词
+                if (AssistantBus.speaking) {
+                    wasSpeaking = true
+                    if (phase == Phase.LISTENING) listenMuted++
+                    continue
+                }
+                if (wasSpeaking) {
+                    wasSpeaking = false
+                    kws!!.reset(kwsStream!!)
+                }
+
+                when (phase) {
+                    Phase.IDLE -> {
+                        val s = kwsStream!!
+                        s.acceptWaveform(chunk, SAMPLE_RATE)
+                        while (kws!!.isReady(s)) kws!!.decode(s)
+                        val r = kws!!.getResult(s)
+                        if (r.keyword.isEmpty()) continue
+
+                        kws!!.reset(s)
+                        AssistantBus.wake()
+                        AssistantBus.log("★ 唤醒：${r.keyword}  tokens=[${r.tokens.joinToString(" ")}]  第 ${AssistantBus.wakeCount} 次")
+                        if (settings.beepOnWake) tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
+                        if (settings.kwsTestMode) continue
+
+                        phase = Phase.LISTENING
+                        listenStart = SystemClock.elapsedRealtime()
+                        speechSeen = false
+                        listenPeakDb = -100f
+                        listenMuted = 0
+                        lastPartial = ""
+                        utterance.clear()
+                        online?.let { asrStream = it.createStream() }
+                        vad?.reset()
+                        AssistantBus.state(EngineState.LISTENING)
+                        AssistantBus.partial("")
+                    }
+
+                    Phase.LISTENING -> {
+                        utterance.add(chunk)
+                        val rec = online
+                        if (rec != null) {
+                            val s = asrStream!!
+                            s.acceptWaveform(chunk, SAMPLE_RATE)
+                            while (rec.isReady(s)) rec.decode(s)
+                            val text = rec.getResult(s).text
+                            if (text != lastPartial) {
+                                lastPartial = text
+                                AssistantBus.partial(text)
+                            }
+                            if (rec.isEndpoint(s)) {
+                                if (text.isBlank()) {
+                                    noCommand()
+                                } else {
+                                    finish(text)
+                                }
+                            }
+                        } else {
+                            val v = vad!!
+                            v.acceptWaveform(chunk)
+                            if (!speechSeen && v.isSpeechDetected()) {
+                                speechSeen = true
+                                // VAD 确认说话时已经晚了几百毫秒，往前多留一段，避免吞掉句首
+                                speechStart = max(0, utterance.size - (VAD_PREROLL_SEC * SAMPLE_RATE).toInt())
+                                AssistantBus.partial("（检测到说话…）")
+                            }
+                            if (!v.empty()) {
+                                v.pop()
+                                AssistantBus.state(EngineState.RECOGNIZING)
+                                val t0 = SystemClock.elapsedRealtime()
+                                val audio = utterance.slice(speechStart)
+                                val st = offline!!.createStream()
+                                st.acceptWaveform(audio, SAMPLE_RATE)
+                                offline!!.decode(st)
+                                val r = offline!!.getResult(st)
+                                st.release()
+                                val dur = audio.size * 1000 / SAMPLE_RATE
+                                val extra = buildString {
+                                    append("音频 ${dur}ms，解码 ${SystemClock.elapsedRealtime() - t0}ms")
+                                    if (r.lang.isNotEmpty()) append("，语种 ${r.lang}")
+                                }
+                                finish(r.text, extra)
+                            } else if (!speechSeen &&
+                                SystemClock.elapsedRealtime() - listenStart > settings.listenTimeoutSec * 1000
+                            ) {
+                                noCommand()
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            asrStream?.release()
+            record.stop()
+            record.release()
+            tone?.release()
+        }
+    }
+
+    // ---------------------------------------------------------------- 调试辅助
+
+    private fun rmsDb(x: FloatArray): Float {
+        var s = 0.0
+        for (v in x) s += v * v
+        val rms = sqrt(s / max(1, x.size))
+        return (20 * log10(rms + 1e-9)).toFloat()
+    }
+
+    /** 每次指令的录音存到 files/recordings，`adb pull` 下来就能在电脑上复现识别问题。 */
+    private fun saveWav(data: FloatArray, text: String) {
+        if (data.isEmpty()) return
+        val dir = File(ctx.getExternalFilesDir(null), "recordings").apply { mkdirs() }
+        val name = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) +
+            "_" + text.take(12).replace(Regex("[^\\p{L}\\p{N}]"), "") + ".wav"
+        WavWriter.write(File(dir, name), data, SAMPLE_RATE)
+        dir.listFiles()?.sortedBy { it.lastModified() }?.dropLast(MAX_RECORDINGS)?.forEach { it.delete() }
+    }
+
+    private class FloatBuffer {
+        private var buf = FloatArray(SAMPLE_RATE * 4)
+        private var n = 0
+        fun add(x: FloatArray) {
+            if (n + x.size > MAX_UTTERANCE_SEC.toInt() * SAMPLE_RATE + SAMPLE_RATE) return
+            if (n + x.size > buf.size) buf = buf.copyOf(max(buf.size * 2, n + x.size))
+            System.arraycopy(x, 0, buf, n, x.size)
+            n += x.size
+        }
+        fun clear() { n = 0 }
+        val size get() = this.n
+        fun toArray() = buf.copyOf(n)
+        fun slice(from: Int) = buf.copyOfRange(from.coerceIn(0, n), n)
+    }
+
+    companion object {
+        const val SAMPLE_RATE = 16000
+        const val VAD_WINDOW = 512
+        const val MAX_UTTERANCE_SEC = 15f
+        const val MAX_RECORDINGS = 30
+        const val VAD_PREROLL_SEC = 1.0f
+    }
+}
