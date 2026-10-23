@@ -1,4 +1,6 @@
-# 小晏助手 · 离线 Android 语音助手
+# Hark · 离线 Android 语音助手
+
+Hark（古英语「听！」）是一个面向手机和平板车机的语音助手。助手默认叫「小晏」，和唤醒词对应。
 
 基于 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 的端侧语音助手。说「小晏小晏」「小海小海」或「小章小章」唤醒，助手播报「我在」并弹出胶囊浮窗，然后说指令即可。**唤醒和识别全程离线**，录音不会离开手机；常用的手机控制指令由本地规则直接执行，只有本地匹配不上的问题，才会把识别出的**文字**发给在线大模型（默认 DeepSeek，可以换成其他服务商，也可以关闭）。
 
@@ -78,7 +80,7 @@
 
 | 文件 | 内容 | 是否必需 |
 |---|---|---|
-| `XiaoYanAssistant-v*-arm64.apk` | 安装包（不含大模型 key，在设置里填自己的 key） | 必需 |
+| `Hark-v*-arm64.apk`（v0.2.0 时叫 `XiaoYanAssistant-v0.2.0-arm64.apk`） | 安装包（不含大模型 key，在设置里填自己的 key） | 必需 |
 | `xiaoyan-models-kws-vad.tar.gz` | 唤醒模型 + VAD | 必需 |
 | `xiaoyan-models-asr-mandarin.tar.gz` | 普通话流式识别 | 用普通话模式时 |
 | `xiaoyan-models-telespeech.tar.gz` | 方言识别（TeleSpeech） | 用方言模式时 |
@@ -87,7 +89,7 @@
 每个模型包解压后都是一个 `models/` 目录，推送到手机即可：
 
 ```bash
-adb install XiaoYanAssistant-v0.2.0-arm64.apk
+adb install Hark-v*-arm64.apk
 for f in xiaoyan-models-*.tar.gz; do tar xzf "$f"; done
 adb push models /sdcard/Android/data/com.xiaoyan.assistant/files/
 ```
@@ -167,7 +169,7 @@ adb shell am start -n com.xiaoyan.assistant/.MainActivity --es cmd 音量调到�
 
 所有话术都集中在 `Phrases.kt` 里，要改说法或者加新的设备形态，只需要改这一个文件。
 
-> 想长期在后台待机的话，在系统电池设置里把小晏助手设为「允许后台运行」，否则国产 ROM 可能会杀掉服务。
+> 想长期在后台待机的话，在系统电池设置里把 Hark 设为「允许后台运行」，否则国产 ROM 可能会杀掉服务。
 
 ## 修改唤醒词
 

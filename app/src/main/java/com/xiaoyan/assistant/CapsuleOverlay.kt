@@ -22,7 +22,7 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import android.view.animation.LinearInterpolator
-import android.view.animation.OvershootInterpolator
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -83,11 +83,19 @@ class CapsuleOverlay(private val ctx: Context, private val mode: DeviceMode, pri
     }
 
     private var attached = false
+    private val removeWindow = Runnable { runCatching { wm.removeView(capsule) } }
 
     fun canShow() = Settings.canDrawOverlays(ctx)
 
     fun show() {
         if (attached) return
+        // 退场动画还没走完又被唤醒：窗口还在，直接反向进场
+        if (capsule.isAttachedToWindow) {
+            capsule.removeCallbacks(removeWindow)
+            attached = true
+            animateIn(fresh = false)
+            return
+        }
         if (!canShow()) {
             AssistantBus.log("没有悬浮窗权限，浮窗不显示（在调试面板里点「授予悬浮窗权限」）")
             return
@@ -104,6 +112,8 @@ class CapsuleOverlay(private val ctx: Context, private val mode: DeviceMode, pri
             gravity = Gravity.CENTER_HORIZONTAL or if (car) Gravity.TOP else Gravity.BOTTOM
             y = dp(if (car) 20 else 48)
             title = "XiaoYanCapsule"
+            // 进出场动画全部由 View 自己做，不叠加系统的窗口动画
+            windowAnimations = 0
         }
         try {
             wm.addView(capsule, lp)
@@ -112,23 +122,40 @@ class CapsuleOverlay(private val ctx: Context, private val mode: DeviceMode, pri
             AssistantBus.log("浮窗显示失败：${e.message}")
             return
         }
-        capsule.alpha = 0f
-        capsule.scaleX = 0.6f
-        capsule.scaleY = 0.6f
-        capsule.translationY = dp(if (car) -12f else 12f)
+        animateIn(fresh = true)
+    }
+
+    /** [fresh] 为 false 时从退场动画当前的样子接着往回走，不跳帧。 */
+    private fun animateIn(fresh: Boolean) {
+        capsule.animate().cancel()
+        capsule.visibility = View.VISIBLE
+        if (fresh) {
+            capsule.alpha = 0f
+            capsule.scaleX = 0.8f
+            capsule.scaleY = 0.8f
+            capsule.translationY = edgeOffset()
+        }
+        // 注意：ViewPropertyAnimator 会沿用上一次设置的插值器，所以进出场每次都显式指定
         capsule.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
-            .setDuration(320).setInterpolator(OvershootInterpolator(1.2f)).start()
+            .setDuration(280).setInterpolator(ENTER).withLayer().start()
         capsule.startGlow()
     }
 
     fun hide() {
         if (!attached) return
         attached = false
-        capsule.animate().alpha(0f).scaleX(0.85f).scaleY(0.85f).setDuration(200).withEndAction {
-            capsule.stopGlow()
-            runCatching { wm.removeView(capsule) }
-        }.start()
+        capsule.animate().cancel()
+        capsule.animate().alpha(0f).scaleX(0.92f).scaleY(0.92f).translationY(edgeOffset())
+            .setDuration(180).setInterpolator(EXIT).withLayer().withEndAction {
+                // 先画一帧完全透明的内容，下一帧再移除窗口，避免系统拿最后一帧旧画面再闪一下
+                capsule.visibility = View.INVISIBLE
+                capsule.stopGlow()
+                capsule.post(removeWindow)
+            }.start()
     }
+
+    /** 进出场时往屏幕边缘方向偏一点：车机往上，手机往下。 */
+    private fun edgeOffset() = dp(if (car) -10f else 10f)
 
     fun level(db: Float) = wave.setLevel(db)
 
@@ -264,6 +291,8 @@ class CapsuleOverlay(private val ctx: Context, private val mode: DeviceMode, pri
     }
 
     companion object {
+        private val ENTER = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
+        private val EXIT = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
         private val GLOW = intArrayOf(
             0xFF4F8BFF.toInt(), 0xFF9B5CFF.toInt(), 0xFFFF5CA8.toInt(), 0xFF3DDCFF.toInt(), 0xFF4F8BFF.toInt(),
         )
