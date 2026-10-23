@@ -72,6 +72,28 @@
 | 语音活动检测 | `silero_vad.onnx` | 0.6 MB | Silero VAD |
 | 推理运行时 | `sherpa-onnx-1.13.8.aar` | 48 MB | 自带 ONNX Runtime 和 JNI 库（已放在 `app/libs/`） |
 
+## 直接下载
+
+不想自己编译的话，在 [Releases](https://github.com/raferlyan/Android-Assistant/releases) 页面下载安装包和模型：
+
+| 文件 | 内容 | 是否必需 |
+|---|---|---|
+| `XiaoYanAssistant-v*-arm64.apk` | 安装包（不含大模型 key，在设置里填自己的 key） | 必需 |
+| `xiaoyan-models-kws-vad.tar.gz` | 唤醒模型 + VAD | 必需 |
+| `xiaoyan-models-asr-mandarin.tar.gz` | 普通话流式识别 | 用普通话模式时 |
+| `xiaoyan-models-telespeech.tar.gz` | 方言识别（TeleSpeech） | 用方言模式时 |
+| `xiaoyan-models-sensevoice.tar.gz` | 粤语 / 多语种（SenseVoice） | 用 SenseVoice 模式时 |
+
+每个模型包解压后都是一个 `models/` 目录，推送到手机即可：
+
+```bash
+adb install XiaoYanAssistant-v0.2.0-arm64.apk
+for f in xiaoyan-models-*.tar.gz; do tar xzf "$f"; done
+adb push models /sdcard/Android/data/com.xiaoyan.assistant/files/
+```
+
+> 推送前要先装好 App 并打开一次，系统才会创建 `Android/data/com.xiaoyan.assistant` 目录。
+
 ## 快速开始
 
 ```bash
