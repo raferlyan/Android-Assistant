@@ -1,4 +1,4 @@
-package com.xiaoyan.assistant
+package com.raferlyan.hark
 
 import android.animation.ValueAnimator
 import android.content.Context

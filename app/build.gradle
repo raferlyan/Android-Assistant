@@ -8,11 +8,11 @@ def localFile = rootProject.file('local.properties')
 if (localFile.exists()) localFile.withInputStream { localProps.load(it) }
 
 android {
-    namespace 'com.xiaoyan.assistant'
+    namespace 'com.raferlyan.hark'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.xiaoyan.assistant'
+        applicationId 'com.raferlyan.hark'
         minSdk 26
         targetSdk 35
         versionCode 2

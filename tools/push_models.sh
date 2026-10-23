@@ -7,7 +7,7 @@
 # 可选组：kws asr tele sensevoice vad
 set -euo pipefail
 
-PKG=com.xiaoyan.assistant
+PKG=com.raferlyan.hark
 DL=${MODEL_CACHE:-$HOME/sherpa-dl}
 DST=/sdcard/Android/data/$PKG/files/models
 B=https://github.com/k2-fsa/sherpa-onnx/releases/download

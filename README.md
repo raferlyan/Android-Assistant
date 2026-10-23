@@ -63,7 +63,7 @@ Hark（古英语「听！」）是一个面向手机和平板车机的语音助�
 
 ## 使用的模型
 
-模型全部来自 sherpa-onnx 官方发布页，均为 int8 量化版本。为了方便替换和调参，**模型不打进 APK**，而是推送到手机的 `/sdcard/Android/data/com.xiaoyan.assistant/files/models/` 目录。
+模型全部来自 sherpa-onnx 官方发布页，均为 int8 量化版本。为了方便替换和调参，**模型不打进 APK**，而是推送到手机的 `/sdcard/Android/data/com.raferlyan.hark/files/models/` 目录。
 
 | 用途 | 模型 | 大小 | 结构 |
 |---|---|---|---|
@@ -81,20 +81,22 @@ Hark（古英语「听！」）是一个面向手机和平板车机的语音助�
 | 文件 | 内容 | 是否必需 |
 |---|---|---|
 | `Hark-v*-arm64.apk`（v0.2.0 时叫 `XiaoYanAssistant-v0.2.0-arm64.apk`） | 安装包（不含大模型 key，在设置里填自己的 key） | 必需 |
-| `xiaoyan-models-kws-vad.tar.gz` | 唤醒模型 + VAD | 必需 |
-| `xiaoyan-models-asr-mandarin.tar.gz` | 普通话流式识别 | 用普通话模式时 |
-| `xiaoyan-models-telespeech.tar.gz` | 方言识别（TeleSpeech） | 用方言模式时 |
-| `xiaoyan-models-sensevoice.tar.gz` | 粤语 / 多语种（SenseVoice） | 用 SenseVoice 模式时 |
+| `hark-models-kws-vad.tar.gz` | 唤醒模型 + VAD | 必需 |
+| `hark-models-asr-mandarin.tar.gz` | 普通话流式识别 | 用普通话模式时 |
+| `hark-models-telespeech.tar.gz` | 方言识别（TeleSpeech） | 用方言模式时 |
+| `hark-models-sensevoice.tar.gz` | 粤语 / 多语种（SenseVoice） | 用 SenseVoice 模式时 |
 
 每个模型包解压后都是一个 `models/` 目录，推送到手机即可：
 
 ```bash
 adb install Hark-v*-arm64.apk
-for f in xiaoyan-models-*.tar.gz; do tar xzf "$f"; done
-adb push models /sdcard/Android/data/com.xiaoyan.assistant/files/
+for f in hark-models-*.tar.gz; do tar xzf "$f"; done
+adb push models /sdcard/Android/data/com.raferlyan.hark/files/
 ```
 
-> 推送前要先装好 App 并打开一次，系统才会创建 `Android/data/com.xiaoyan.assistant` 目录。
+> 推送前要先装好 App 并打开一次，系统才会创建 `Android/data/com.raferlyan.hark` 目录。
+>
+> v0.2.0 的包名还是旧的 `com.xiaoyan.assistant`，装这个版本时，推送目录也要换成 `/sdcard/Android/data/com.xiaoyan.assistant/files/`。从 v0.3.0 起包名改为 `com.raferlyan.hark`，和旧版是两个不同的应用，不能覆盖升级。
 
 ## 快速开始
 
@@ -125,7 +127,7 @@ llm.apiKey=sk-xxxx
 不说话也能测意图：在调试面板的输入框里打字后点「发送」，或者用 adb：
 
 ```bash
-adb shell am start -n com.xiaoyan.assistant/.MainActivity --es cmd 音量调到五十
+adb shell am start -n com.raferlyan.hark/.MainActivity --es cmd 音量调到五十
 ```
 
 ## 语音浮窗与交互流程
@@ -421,7 +423,7 @@ adb logcat -s XiaoYan
 拉取每条指令的录音（未识别到指令而超时的那一轮也会保存，文件名带 `timeout`）：
 
 ```bash
-adb pull /sdcard/Android/data/com.xiaoyan.assistant/files/recordings/
+adb pull /sdcard/Android/data/com.raferlyan.hark/files/recordings/
 ```
 
 日志里有几个对排查问题很有用的字段：

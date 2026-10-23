@@ -1,10 +1,10 @@
-package com.xiaoyan.assistant
+package com.raferlyan.hark
 
 import android.content.Context
 import java.io.File
 
 /**
- * 模型不打进 APK，用 adb push 到 /sdcard/Android/data/com.xiaoyan.assistant/files/models/，
+ * 模型不打进 APK，用 adb push 到 /sdcard/Android/data/com.raferlyan.hark/files/models/，
  * 换模型、调参都不用重新安装。见 tools/push_models.sh。
  */
 class ModelPaths(ctx: Context) {

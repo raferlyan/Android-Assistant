@@ -1,4 +1,4 @@
-package com.xiaoyan.assistant
+package com.raferlyan.hark
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -89,7 +89,7 @@ class AssistantEngine(
     fun start() {
         if (running) return
         running = true
-        thread = Thread(::run, "xiaoyan-engine").apply { start() }
+        thread = Thread(::run, "hark-engine").apply { start() }
     }
 
     fun stop() {

@@ -1,4 +1,4 @@
-package com.xiaoyan.assistant
+package com.raferlyan.hark
 
 import android.app.SearchManager
 import android.content.ActivityNotFoundException

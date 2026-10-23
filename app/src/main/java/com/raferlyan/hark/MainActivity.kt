@@ -1,4 +1,4 @@
-package com.xiaoyan.assistant
+package com.raferlyan.hark
 
 import android.Manifest
 import android.app.Activity
@@ -31,7 +31,7 @@ import android.widget.Toast
  * 调试界面：上半部分看实时状态（唤醒次数、音量、识别结果、回复、日志），
  * 下半部分调参数，点「保存并重启引擎」立即生效。
  *
- * 也可以不说话直接测意图：`adb shell am start -n com.xiaoyan.assistant/.MainActivity --es cmd 打开手电筒`
+ * 也可以不说话直接测意图：`adb shell am start -n com.raferlyan.hark/.MainActivity --es cmd 打开手电筒`
  */
 class MainActivity : Activity(), AssistantBus.Listener {
 
