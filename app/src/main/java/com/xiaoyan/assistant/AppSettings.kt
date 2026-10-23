@@ -14,7 +14,7 @@ enum class AsrMode(val label: String) {
  */
 data class AppSettings(
     /** 每行一个唤醒词：`小晏小晏 :2.0 #0.20`，也可以直接写 token：`x iǎo y àn x iǎo y àn @小晏小晏`。 */
-    val keywords: String = "小晏小晏 :2.0 #0.20",
+    val keywords: String = DEFAULT_KEYWORDS,
     /** 全局唤醒阈值，越小越容易唤醒（误唤醒也越多）。 */
     val kwsThreshold: Float = 0.25f,
     /** 全局唤醒词增强分数，越大越容易唤醒。 */
@@ -67,6 +67,7 @@ data class AppSettings(
     }
 
     companion object {
+        const val DEFAULT_KEYWORDS = "小晏小晏 :2.0 #0.20\n小海小海 :2.0 #0.20\n小章小章 :2.0 #0.20"
         const val DEFAULT_HOTWORDS = "打开手电 :2.0\n关闭手电 :2.0\n音量调大\n音量调小\n现在几点"
         const val DEFAULT_CORRECTIONS = "小燕=>小晏\n小雁=>小晏\n小艳=>小晏\n小严=>小晏\n大开=>打开"
 

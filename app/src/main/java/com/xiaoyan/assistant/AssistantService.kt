@@ -66,7 +66,7 @@ class AssistantService : Service() {
         val n = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("小晏助手运行中")
-            .setContentText("说「小晏小晏」唤醒")
+            .setContentText("说「小晏小晏」「小海小海」「小章小章」唤醒")
             .setContentIntent(open)
             .setOngoing(true)
             .build()

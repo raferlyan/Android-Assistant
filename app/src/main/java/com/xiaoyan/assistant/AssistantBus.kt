@@ -11,7 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 enum class EngineState(val label: String) {
     STOPPED("已停止"),
     LOADING("加载模型中…"),
-    IDLE("等待唤醒：说「小晏小晏」"),
+    IDLE("等待唤醒：说唤醒词，如「小晏小晏」"),
     LISTENING("正在聆听…"),
     RECOGNIZING("识别中…"),
     ERROR("出错"),
