@@ -60,6 +60,7 @@ class VoiceSession(private val ctx: Context, private val s: AppSettings) : Assis
     override fun onWake(keyword: String) {
         speaker.speak(phrases.greet) { showListening(phrases.listenHint) }
         main.post {
+            phrases.name = Phrases.nameOf(keyword)
             generation.incrementAndGet()
             history.clear()
             ui = Ui.GREETING
@@ -73,6 +74,7 @@ class VoiceSession(private val ctx: Context, private val s: AppSettings) : Assis
         generation.incrementAndGet()
         speaker.stop()
         main.post {
+            phrases.name = Phrases.nameOf(keyword)
             engineWaiting = false
             overlay?.show()
             showListening(phrases.listenHint)

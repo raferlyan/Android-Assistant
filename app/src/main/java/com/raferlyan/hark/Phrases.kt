@@ -9,6 +9,9 @@ package com.raferlyan.hark
  */
 class Phrases(val mode: DeviceMode) {
 
+    /** 助手的名字，跟着本轮会话的唤醒词走：喊「小海小海」就叫小海。 */
+    var name = DEFAULT_NAME
+
     private fun pick(car: String, phone: String) = if (mode == DeviceMode.CAR) car else phone
 
     val greet = "我在"
@@ -37,7 +40,7 @@ class Phrases(val mode: DeviceMode) {
     val brightnessMin get() = pick("好的，亮度已调到最低", "亮度已经调到最低了")
     fun brightnessSet(pct: Int) = pick("好的，亮度已调到百分之$pct", "亮度调到百分之${pct}了")
     val needWriteSettings get() = pick(
-        "请先允许小晏修改系统设置",
+        "请先允许${name}修改系统设置",
         "需要你先允许我修改系统设置，设置页面已经打开了",
     )
 
@@ -67,7 +70,7 @@ class Phrases(val mode: DeviceMode) {
 
     fun time(s: String) = "现在是$s"
     fun date(s: String) = "今天是$s"
-    val intro get() = pick("我是小晏，你的车载语音助手", "我是小晏，你的手机语音助手")
+    val intro get() = pick("我是$name，你的车载语音助手", "我是$name，你的手机语音助手")
 
     fun webSearch(q: String) = pick("已为你搜索$q", "帮你搜了一下$q，看看屏幕吧")
     val notUnderstood get() = pick("抱歉，这个我还不会", "这个我还不太会，换个说法试试")
@@ -76,10 +79,22 @@ class Phrases(val mode: DeviceMode) {
 
     /** 大模型的系统提示词，同样分车机/手机两种口吻。 */
     fun llmSystemPrompt(now: String) = pick(
-        "你是车载语音助手「小晏」，运行在平板车机上。用户正在驾车，回答必须简短直接，" +
+        "你是车载语音助手「$name」，运行在平板车机上。用户正在驾车，回答必须简短直接，" +
             "一般一到两句话、不超过60个字，口语化，不要反问。",
-        "你是手机语音助手「小晏」。回答口语化、亲切自然，像朋友聊天，一般不超过100个字。",
+        "你是手机语音助手「$name」。回答口语化、亲切自然，像朋友聊天，一般不超过100个字。",
     ) + "回答会被直接转成语音播报，所以不要使用 Markdown、列表、编号、表情符号和链接。" +
         "你无法联网获取实时信息（天气、路况、新闻、股价、比分等），遇到这类问题直接说明，" +
         "并建议用户说「搜索」加关键词。当前时间：$now。"
+
+    companion object {
+        const val DEFAULT_NAME = "小晏"
+
+        /** 唤醒词 → 名字：叠词取一半（小海小海 → 小海），其他原样用（小晏同学 → 小晏同学）。 */
+        fun nameOf(wakeWord: String): String {
+            val w = wakeWord.trim()
+            if (w.isEmpty()) return DEFAULT_NAME
+            val half = w.length / 2
+            return if (w.length % 2 == 0 && w.substring(0, half) == w.substring(half)) w.substring(0, half) else w
+        }
+    }
 }
