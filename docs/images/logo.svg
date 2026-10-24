@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1B1F2E"/>
+      <stop offset="1" stop-color="#0D0F17"/>
+    </linearGradient>
+    <linearGradient id="bars" gradientUnits="userSpaceOnUse" x1="90" y1="116" x2="422" y2="396">
+      <stop offset="0" stop-color="#3DDCFF"/>
+      <stop offset="0.35" stop-color="#4F8BFF"/>
+      <stop offset="0.7" stop-color="#9B5CFF"/>
+      <stop offset="1" stop-color="#FF5CA8"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3DDCFF" stop-opacity="0.55"/>
+      <stop offset="0.5" stop-color="#9B5CFF" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#FF5CA8" stop-opacity="0.55"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bg)"/>
+  <rect x="6" y="6" width="500" height="500" rx="110" fill="none" stroke="url(#ring)" stroke-width="4"/>
+  <!-- five sound bars that read as an "H" -->
+  <g fill="url(#bars)">
+    <rect x="90" y="116" width="44" height="280" rx="22"/>
+    <rect x="162" y="208" width="44" height="96" rx="22"/>
+    <rect x="234" y="180" width="44" height="152" rx="22"/>
+    <rect x="306" y="208" width="44" height="96" rx="22"/>
+    <rect x="378" y="116" width="44" height="280" rx="22"/>
+  </g>
+</svg>

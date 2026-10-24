@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hark 图标前景：五根声波条组成字母 H，配色与胶囊浮窗一致 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.14"
+        android:scaleY="0.14"
+        android:translateX="18.16"
+        android:translateY="18.16">
+        <path android:pathData="M112,116a22,22 0,0 1,22 22v236a22,22 0,0 1,-44 0v-236a22,22 0,0 1,22 -22z M184,208a22,22 0,0 1,22 22v52a22,22 0,0 1,-44 0v-52a22,22 0,0 1,22 -22z M256,180a22,22 0,0 1,22 22v108a22,22 0,0 1,-44 0v-108a22,22 0,0 1,22 -22z M328,208a22,22 0,0 1,22 22v52a22,22 0,0 1,-44 0v-52a22,22 0,0 1,22 -22z M400,116a22,22 0,0 1,22 22v236a22,22 0,0 1,-44 0v-236a22,22 0,0 1,22 -22z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="90"
+                    android:startY="116"
+                    android:endX="422"
+                    android:endY="396">
+                    <item android:offset="0" android:color="#FF3DDCFF" />
+                    <item android:offset="0.35" android:color="#FF4F8BFF" />
+                    <item android:offset="0.7" android:color="#FF9B5CFF" />
+                    <item android:offset="1" android:color="#FFFF5CA8" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+</vector>

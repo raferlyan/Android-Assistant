@@ -1,8 +1,29 @@
-# Hark · 离线 Android 语音助手
+<p align="center">
+  <img src="docs/images/logo.svg" width="128" alt="Hark logo">
+</p>
+
+<h1 align="center">Hark · 离线 Android 语音助手</h1>
 
 Hark（古英语「听！」）是一个面向手机和平板车机的语音助手。助手默认叫「小晏」，和唤醒词对应。
 
 基于 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 的端侧语音助手。说「小晏小晏」「小海小海」或「小章小章」唤醒，助手播报「我在」并弹出胶囊浮窗，然后说指令即可。**唤醒和识别全程离线**，录音不会离开手机；常用的手机控制指令由本地规则直接执行，只有本地匹配不上的问题，才会把识别出的**文字**发给在线大模型（默认 DeepSeek，可以换成其他服务商，也可以关闭）。
+
+## 使用截图
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/screenshot-local-command.jpg" width="240" alt="本地指令"></td>
+    <td align="center"><img src="docs/images/screenshot-llm-answer.jpg" width="240" alt="大模型回答"></td>
+    <td align="center"><img src="docs/images/screenshot-panel.jpg" width="240" alt="调试面板"></td>
+  </tr>
+  <tr>
+    <td align="center">本地指令：「打开手电筒」<br>规则命中，直接执行并播报</td>
+    <td align="center">在线大模型：「为什么天空是蓝色的」<br>本地没匹配上，交给 DeepSeek 回答</td>
+    <td align="center">调试面板<br>引擎启动，等待唤醒</td>
+  </tr>
+</table>
+
+截图来自一加 7 Pro（手机模式，胶囊浮窗在屏幕底部）。
 
 ## 当前能力
 
