@@ -97,7 +97,7 @@ Hark（古英语「听！」）是一个面向手机和平板车机的语音助�
 
 ## 直接下载
 
-不想自己编译的话，在 [Releases](https://github.com/raferlyan/Android-Assistant/releases) 页面下载安装包和模型：
+不想自己编译的话，在 [Releases](https://github.com/raferlyan/Hark/releases) 页面下载安装包和模型：
 
 | 文件 | 内容 | 是否必需 |
 |---|---|---|
